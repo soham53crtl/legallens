@@ -1,7 +1,7 @@
 # LegalLens
 
-[![Backend tests](https://github.com/Sohamcrtl53/legallens/actions/workflows/backend-tests.yml/badge.svg)](https://github.com/Sohamcrtl53/legallens/actions/workflows/backend-tests.yml)
-[![Frontend build](https://github.com/Sohamcrtl53/legallens/actions/workflows/frontend-build.yml/badge.svg)](https://github.com/Sohamcrtl53/legallens/actions/workflows/frontend-build.yml)
+[![Backend tests](https://github.com/soham53crtl/legallens/actions/workflows/backend-tests.yml/badge.svg)](https://github.com/soham53crtl/legallens/actions/workflows/backend-tests.yml)
+[![Frontend build](https://github.com/soham53crtl/legallens/actions/workflows/frontend-build.yml/badge.svg)](https://github.com/soham53crtl/legallens/actions/workflows/frontend-build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 An AI-powered legal document assistant built for the PromptWars "AI for Legal Assistance &
@@ -13,7 +13,7 @@ prepares them to talk to an actual lawyer.
 legal advice and does not replace a qualified legal professional.**
 
 > Update the two badge URLs above if you push this to a different GitHub repo path than
-> `Sohamcrtl53/legallens`.
+> `soham53crtl/legallens`.
 
 ## Project structure
 
@@ -156,7 +156,7 @@ app's own logic rather than Anthropic's).
 This directory is already a git repository with an initial commit (see below). To push it:
 
 ```bash
-git remote add origin https://github.com/Sohamcrtl53/legallens.git
+git remote add origin https://github.com/soham53crtl/legallens.git
 git branch -M main
 git push -u origin main
 ```
