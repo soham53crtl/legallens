@@ -1,17 +1,20 @@
-"""All LLM calls funnel through here.
+﻿"""All LLM calls funnel through here.
 
-Requires ANTHROPIC_API_KEY to be set in the environment. In production
-(e.g. Render, matching the pattern used for other deployments) this comes
-from the platform's secret store — it is never sent from or exposed to
-the frontend. If the key is missing, every function here raises
-AIConfigError with a clear message rather than failing silently.
+Requires GEMINI_API_KEY to be set in the environment (get one free, no
+card required, at https://aistudio.google.com/apikey). In production
+(e.g. Render) this comes from the platform's secret store - it is never
+sent from or exposed to the frontend. If the key is missing, every
+function here raises AIConfigError with a clear message rather than
+failing silently.
 """
 import json
 import os
 from typing import List, Optional
-from anthropic import Anthropic, APIError
+from google import genai
+from google.genai import types
+from google.genai import errors as genai_errors
 
-MODEL = "claude-sonnet-4-6"
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 SYSTEM_BASE = """You are the analysis engine behind LegalLens, an AI legal-information and document-assistance tool. You are NOT a lawyer and never provide legal advice.
 Rules you must always follow:
@@ -19,20 +22,21 @@ Rules you must always follow:
 2. Never make definitive predictions about legal outcomes (e.g. never say something like "you will win" or "this is illegal"). Describe what the document says and general informational context only.
 3. If information needed to answer is missing, incomplete, or ambiguous, say so explicitly rather than guessing.
 4. Reference clause IDs (e.g. "C4") from the list you are given wherever a claim can be traced to a specific clause.
-5. Keep fields concise. Respond with ONLY valid JSON matching the schema given — no markdown fences, no commentary, no text outside the JSON object."""
+5. Keep fields concise. Respond with ONLY valid JSON matching the schema given - no markdown fences, no commentary, no text outside the JSON object."""
 
 
 class AIConfigError(Exception):
     pass
 
 
-def _client() -> Anthropic:
-    key = os.environ.get("ANTHROPIC_API_KEY")
+def _client() -> genai.Client:
+    key = os.environ.get("GEMINI_API_KEY")
     if not key:
         raise AIConfigError(
-            "ANTHROPIC_API_KEY is not set. Set it in the backend environment to enable AI features."
+            "GEMINI_API_KEY is not set. Set it in the backend environment to enable AI features "
+            "(free key: https://aistudio.google.com/apikey)."
         )
-    return Anthropic(api_key=key)
+    return genai.Client(api_key=key)
 
 
 def _clause_block(clauses) -> str:
@@ -41,20 +45,20 @@ def _clause_block(clauses) -> str:
 
 def _call_json(system: str, user: str) -> dict:
     client = _client()
+    config = types.GenerateContentConfig(
+        system_instruction=system,
+        max_output_tokens=2000,
+        response_mime_type="application/json",
+    )
     try:
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=1000,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-    except APIError as e:
-        raise AIConfigError(f"Anthropic API error: {e}")
-    raw = "".join(b.text for b in resp.content if b.type == "text").strip()
-    return _parse_json(raw, system, user, client)
+        resp = client.models.generate_content(model=MODEL, contents=user, config=config)
+    except genai_errors.APIError as e:
+        raise AIConfigError(f"Gemini API error: {e}")
+    raw = (resp.text or "").strip()
+    return _parse_json(raw, system, user, client, config)
 
 
-def _parse_json(raw: str, system: str, user: str, client: Anthropic) -> dict:
+def _parse_json(raw: str, system: str, user: str, client: genai.Client, config) -> dict:
     cleaned = raw.strip()
     for fence in ("```json", "```"):
         if cleaned.startswith(fence):
@@ -68,13 +72,13 @@ def _parse_json(raw: str, system: str, user: str, client: Anthropic) -> dict:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=1000,
-            system=system + "\nCRITICAL: return ONLY the JSON object, nothing else.",
-            messages=[{"role": "user", "content": user}],
+        stricter_config = types.GenerateContentConfig(
+            system_instruction=system + "\nCRITICAL: return ONLY the JSON object, nothing else.",
+            max_output_tokens=config.max_output_tokens,
+            response_mime_type="application/json",
         )
-        raw2 = "".join(b.text for b in resp.content if b.type == "text").strip()
+        resp = client.models.generate_content(model=MODEL, contents=user, config=stricter_config)
+        raw2 = (resp.text or "").strip()
         first, last = raw2.find("{"), raw2.rfind("}")
         return json.loads(raw2[first : last + 1])
 
@@ -119,7 +123,7 @@ def answer_chat(retrieved_clauses, history: List[dict], question: str) -> dict:
 
 New question: {question}
 
-The clauses below were retrieved by the document's search index as the most relevant to this question — they are NOT necessarily the whole document. Answer using only these clauses.
+The clauses below were retrieved by the document's search index as the most relevant to this question - they are NOT necessarily the whole document. Answer using only these clauses.
 Return ONLY a JSON object:
 {{"answer":"1-4 sentence plain-language answer","citedClauses":["ids that support the answer"],"documentSupport":"full|partial|none"}}
 If these clauses don't actually address the question, set documentSupport to "none" and say so plainly rather than fabricating an answer.
@@ -132,7 +136,7 @@ RETRIEVED CLAUSES:
 def next_steps(retrieved_clauses, question: Optional[str]) -> dict:
     context = f'The user asked: "{question}"' if question else "The user wants general next steps for handling this document."
     prompt = f"""{context}
-Based only on the clauses below, suggest general informational next steps — never definitive legal advice, never a predicted outcome.
+Based only on the clauses below, suggest general informational next steps - never definitive legal advice, never a predicted outcome.
 Return ONLY a JSON object:
 {{"steps": ["up to 4 short, concrete next steps, e.g. 'Review Clause 7', 'Collect proof of payment history', 'Ask a lawyer about the early-termination fee'"], "rationale": "one sentence on why these steps, or null"}}
 
@@ -143,7 +147,7 @@ CLAUSES:
 
 def describe_diff(diff_entries, clauses_a, clauses_b) -> dict:
     """Takes the *computed* diff (from diffing.py) and asks the LLM only to
-    phrase it for a non-lawyer reader — it cannot invent a difference that
+    phrase it for a non-lawyer reader - it cannot invent a difference that
     the computed diff didn't already find, since only the flagged entries
     are passed in."""
     lines = []
@@ -156,7 +160,7 @@ def describe_diff(diff_entries, clauses_a, clauses_b) -> dict:
             lines.append(
                 f"MODIFIED (A:{e.clause_id_a} -> B:{e.clause_id_b}, similarity={e.similarity}):\n  OLD: {e.text_a[:300]}\n  NEW: {e.text_b[:300]}"
             )
-    prompt = f"""Below is a pre-computed, verified list of clause-level differences between Document A and Document B (already determined by text comparison — do not add or remove any differences, only explain the ones listed).
+    prompt = f"""Below is a pre-computed, verified list of clause-level differences between Document A and Document B (already determined by text comparison - do not add or remove any differences, only explain the ones listed).
 For each MODIFIED entry, classify it into one or more of: changedWording, changedAmounts, changedDates, changedObligations, changedTermination.
 Return ONLY a JSON object:
 {{ "added": ["short description per ADDED entry"],
@@ -173,7 +177,7 @@ COMPUTED DIFF:
 
 
 def lawyer_prep(clauses, concern: Optional[str]) -> dict:
-    concern_line = f'The user\'s stated concern: "{concern}"' if concern else "No specific concern stated — general review requested."
+    concern_line = f'The user\'s stated concern: "{concern}"' if concern else "No specific concern stated - general review requested."
     prompt = f"""Create a lawyer-preparation briefing for this document. {concern_line}
 Return ONLY a JSON object:
 {{ "documentType":"short label",

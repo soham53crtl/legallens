@@ -51,7 +51,7 @@ def _handle_ai_error(e: Exception):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "ai_configured": bool(ai.os.environ.get("ANTHROPIC_API_KEY"))}
+    return {"status": "ok", "ai_configured": bool(ai.os.environ.get("GEMINI_API_KEY"))}
 
 
 @app.post("/session")

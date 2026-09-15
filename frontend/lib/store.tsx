@@ -96,3 +96,19 @@ export function DocProvider({ children }: { children: React.ReactNode }) {
         setCompareDoc,
         updateDoc,
         updateCompareDoc,
+        resetAll,
+        syncSessionId,
+      }}
+    >
+      {children}
+    </DocContext.Provider>
+  );
+}
+
+export function useDoc() {
+  const ctx = useContext(DocContext);
+  if (!ctx) throw new Error("useDoc must be used within DocProvider");
+  return ctx;
+}
+
+export type { DocData, CompareDocData };
