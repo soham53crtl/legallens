@@ -26,7 +26,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: Run tests
         # No ANTHROPIC_API_KEY is set here on purpose — the suite mocks every
