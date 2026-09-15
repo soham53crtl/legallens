@@ -31,6 +31,7 @@ interface DocContextValue {
   updateCompareDoc: (patch: Partial<CompareDocData>) => void;
   setChatHistory: (h: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   resetAll: () => void;
+  syncSessionId: (sid: string) => void;
 }
 
 const DocContext = createContext<DocContextValue | null>(null);
@@ -76,6 +77,13 @@ export function DocProvider({ children }: { children: React.ReactNode }) {
     setCompareDocState(null);
     setChatHistoryState([]);
   }, []);
+  const syncSessionId = useCallback((sid: string) => {
+    setSessionId((prev) => {
+      if (prev === sid) return prev;
+      if (typeof window !== "undefined") sessionStorage.setItem("ll_session_id", sid);
+      return sid;
+    });
+  }, []);
 
   return (
     <DocContext.Provider
@@ -88,19 +96,3 @@ export function DocProvider({ children }: { children: React.ReactNode }) {
         setCompareDoc,
         updateDoc,
         updateCompareDoc,
-        setChatHistory,
-        resetAll,
-      }}
-    >
-      {children}
-    </DocContext.Provider>
-  );
-}
-
-export function useDoc() {
-  const ctx = useContext(DocContext);
-  if (!ctx) throw new Error("useDoc must be used within DocProvider");
-  return ctx;
-}
-
-export type { DocData, CompareDocData };

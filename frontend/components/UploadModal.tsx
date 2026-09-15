@@ -13,7 +13,7 @@ export default function UploadModal({
   onClose: () => void;
 }) {
   const router = useRouter();
-  const { sessionId, setDoc, setCompareDoc, doc } = useDoc();
+  const { sessionId, setDoc, setCompareDoc, doc, syncSessionId } = useDoc();
   const [dragging, setDragging] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -40,6 +40,7 @@ export default function UploadModal({
     setStatus(`Reading ${file.name}…`);
     try {
       const res = await uploadDocument(sessionId, file);
+      syncSessionId(res.session_id);
       if (mode === "compare") {
         setCompareDoc({ ...toDocData(res), compareResult: null, compareStatus: "idle" });
         onClose();
@@ -66,16 +67,21 @@ export default function UploadModal({
     setBusy(true);
     try {
       if (mode === "compare") {
+        let sid = sessionId;
         if (!doc) {
-          const base = await loadDemoDocument(sessionId, "lease");
+          const base = await loadDemoDocument(sid, "lease");
+          sid = base.session_id;
+          syncSessionId(sid);
           setDoc(toDocData(base));
         }
-        const res = await loadDemoDocument(sessionId, "lease_renewal");
+        const res = await loadDemoDocument(sid, "lease_renewal");
+        syncSessionId(res.session_id);
         setCompareDoc({ ...toDocData(res), compareResult: null, compareStatus: "idle" });
         onClose();
         router.push("/compare");
       } else {
         const res = await loadDemoDocument(sessionId, "lease");
+        syncSessionId(res.session_id);
         setDoc(toDocData(res));
         setCompareDoc(null);
         onClose();
