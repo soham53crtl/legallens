@@ -96,6 +96,7 @@ export function DocProvider({ children }: { children: React.ReactNode }) {
         setCompareDoc,
         updateDoc,
         updateCompareDoc,
+        setChatHistory,
         resetAll,
         syncSessionId,
       }}
