@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDoc } from "@/lib/store";
 import { uploadDocument, loadDemoDocument, ApiError } from "@/lib/api";
@@ -18,6 +18,16 @@ export default function UploadModal({
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   function toDocData(res: UploadResponse) {
     return {
@@ -96,15 +106,21 @@ export default function UploadModal({
 
   return (
     <div className="fixed inset-0 z-[100] bg-ink/55 flex items-center justify-center px-4">
-      <div className="relative bg-white w-[520px] max-w-full rounded-md p-8 shadow-paper text-center">
+      <div
+        className="relative bg-white w-[520px] max-w-full rounded-md p-8 shadow-paper text-center"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="upload-modal-title"
+      >
         <button
-          className="absolute top-3.5 right-4 text-xl text-ink-faint leading-none"
+          ref={closeButtonRef}
+          className="absolute top-3.5 right-4 text-xl text-ink-faint leading-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-highlight"
           onClick={onClose}
           aria-label="Close"
         >
           ×
         </button>
-        <h3 className="text-xl font-semibold mb-2">
+        <h3 id="upload-modal-title" className="text-xl font-semibold mb-2">
           {mode === "compare" ? "Upload document to compare" : "Upload a legal document"}
         </h3>
         <p className="text-ink-soft text-[13.5px] mb-5">
@@ -129,17 +145,19 @@ export default function UploadModal({
           }}
         >
           Drag a file here, or{" "}
-          <span
-            className="text-highlight-ink font-semibold underline cursor-pointer"
+          <button
+            type="button"
+            className="text-highlight-ink font-semibold underline cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-highlight"
             onClick={() => inputRef.current?.click()}
           >
             browse
-          </span>
+          </button>
           <input
             ref={inputRef}
             type="file"
             accept=".pdf,.docx,.txt"
             className="hidden"
+            aria-label="Choose a legal document file to upload (PDF, DOCX, or TXT)"
             onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
           />
         </div>

@@ -118,6 +118,7 @@ export default function Analysis() {
             <button
               key={s}
               onClick={() => setFilter(s)}
+              aria-pressed={filter === s}
               className={`text-[12.5px] px-3.5 py-1.5 rounded-full border ${
                 filter === s ? "bg-ink text-paper border-ink" : "bg-white text-ink-soft border-line-strong"
               }`}
@@ -186,11 +187,13 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 function ClauseRef({ id, onClick, label }: { id: string; onClick: (id: string) => void; label?: string }) {
   return (
-    <span
-      className="inline-block text-[11px] font-mono bg-paper-alt border border-line px-1.5 py-0.5 rounded-sm cursor-pointer text-ink-soft hover:bg-highlight-soft hover:border-highlight"
+    <button
+      type="button"
       onClick={() => onClick(id)}
+      className="inline-block text-[11px] font-mono bg-paper-alt border border-line px-1.5 py-0.5 rounded-sm cursor-pointer text-ink-soft hover:bg-highlight-soft hover:border-highlight focus-visible:outline focus-visible:outline-2 focus-visible:outline-highlight"
+      aria-label={label ? undefined : `View source text for clause ${id}`}
     >
       {label || id}
-    </span>
+    </button>
   );
 }

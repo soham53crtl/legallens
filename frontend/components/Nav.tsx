@@ -38,6 +38,7 @@ export default function Nav() {
               <Link
                 key={t.href}
                 href={t.href}
+                aria-current={pathname === t.href ? "page" : undefined}
                 className={`px-3.5 py-2 text-[13.5px] font-medium border-b-2 ${
                   pathname === t.href
                     ? "text-ink border-highlight"

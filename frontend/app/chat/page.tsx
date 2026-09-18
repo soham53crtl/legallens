@@ -119,13 +119,15 @@ export default function Chat() {
                 {!!m.citedClauses?.length && (
                   <div className="flex gap-1.5 flex-wrap mt-2">
                     {m.citedClauses.map((id) => (
-                      <span
+                      <button
                         key={id}
+                        type="button"
                         onClick={() => setOpenClause(id)}
-                        className="text-[11px] font-mono bg-paper-alt border border-line px-1.5 py-0.5 rounded-sm cursor-pointer hover:bg-highlight-soft"
+                        aria-label={`View source text for clause ${id}`}
+                        className="text-[11px] font-mono bg-paper-alt border border-line px-1.5 py-0.5 rounded-sm cursor-pointer hover:bg-highlight-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-highlight"
                       >
                         {id}
-                      </span>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -176,14 +178,16 @@ export default function Chat() {
           <h4 className="text-[12.5px] uppercase tracking-wider text-ink-faint mb-3">Document clauses</h4>
           <div className="max-h-[64vh] overflow-y-auto">
             {doc.clauses.map((c) => (
-              <div
+              <button
+                type="button"
                 key={c.id}
-                className="text-[12.5px] py-2 border-b border-line cursor-pointer"
+                className="w-full text-left text-[12.5px] py-2 border-b border-line cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-highlight"
                 onClick={() => setOpenClause(c.id)}
+                aria-label={`View source text for clause ${c.id}: ${c.heading}`}
               >
                 <b className="font-mono text-highlight-ink block mb-0.5">{c.id}</b>
                 <span className="text-ink-soft">{c.heading}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
