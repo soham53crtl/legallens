@@ -1,4 +1,4 @@
-﻿"""All LLM calls funnel through here.
+"""All LLM calls funnel through here.
 
 Requires GEMINI_API_KEY to be set in the environment (get one free, no
 card required, at https://aistudio.google.com/apikey). In production
@@ -15,6 +15,7 @@ from google.genai import types
 from google.genai import errors as genai_errors
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 SYSTEM_BASE = """You are the analysis engine behind LegalLens, an AI legal-information and document-assistance tool. You are NOT a lawyer and never provide legal advice.
 Rules you must always follow:
@@ -43,44 +44,214 @@ def _clause_block(clauses) -> str:
     return "\n".join(f"{c.id}: {c.text[:320].strip()}" for c in clauses)
 
 
-def _call_json(system: str, user: str) -> dict:
-    client = _client()
-    config = types.GenerateContentConfig(
-        system_instruction=system,
-        max_output_tokens=2000,
-        response_mime_type="application/json",
-    )
+# ---------------------------------------------------------------------------
+# JSON schemas
+#
+# These are passed as response_schema so Gemini uses constrained decoding to
+# guarantee structurally valid, on-shape JSON, instead of just being asked
+# nicely in the prompt. This is what actually prevents "Expecting ','
+# delimiter" / truncated-JSON errors - the mime type alone does not.
+# ---------------------------------------------------------------------------
+
+_STR = {"type": "STRING"}
+_STR_ARRAY = {"type": "ARRAY", "items": _STR}
+
+SUMMARY_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "documentType": _STR,
+        "summary": _STR,
+        "obligations": _STR_ARRAY,
+        "rights": _STR_ARRAY,
+        "payments": _STR_ARRAY,
+        "importantDates": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {"label": _STR, "detail": _STR, "clauseId": _STR},
+                "required": ["label", "detail"],
+            },
+        },
+        "restrictions": _STR_ARRAY,
+        "terminationConditions": _STR_ARRAY,
+        "consequences": _STR_ARRAY,
+        "missingOrInconsistent": _STR_ARRAY,
+    },
+    "required": [
+        "documentType", "summary", "obligations", "rights", "payments",
+        "importantDates", "restrictions", "terminationConditions",
+        "consequences", "missingOrInconsistent",
+    ],
+}
+
+RISKS_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "risks": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "clauseId": _STR,
+                    "title": _STR,
+                    "category": {
+                        "type": "STRING",
+                        "enum": [
+                            "Financial Obligation", "Penalty", "Termination",
+                            "Notice Period", "Renewal", "Confidentiality",
+                            "Non-Compete", "Dispute Resolution",
+                            "Missing/Inconsistent", "Other",
+                        ],
+                    },
+                    "severity": {"type": "STRING", "enum": ["high", "medium", "standard"]},
+                    "explanation": _STR,
+                },
+                "required": ["clauseId", "title", "category", "severity", "explanation"],
+            },
+        }
+    },
+    "required": ["risks"],
+}
+
+CHAT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "answer": _STR,
+        "citedClauses": _STR_ARRAY,
+        "documentSupport": {"type": "STRING", "enum": ["full", "partial", "none"]},
+    },
+    "required": ["answer", "citedClauses", "documentSupport"],
+}
+
+NEXT_STEPS_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "steps": _STR_ARRAY,
+        "rationale": {"type": "STRING", "nullable": True},
+    },
+    "required": ["steps"],
+}
+
+DIFF_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "added": _STR_ARRAY,
+        "removed": _STR_ARRAY,
+        "changedWording": _STR_ARRAY,
+        "changedAmounts": _STR_ARRAY,
+        "changedDates": _STR_ARRAY,
+        "changedObligations": _STR_ARRAY,
+        "changedTermination": _STR_ARRAY,
+    },
+    "required": [
+        "added", "removed", "changedWording", "changedAmounts",
+        "changedDates", "changedObligations", "changedTermination",
+    ],
+}
+
+LAWYER_PREP_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "documentType": _STR,
+        "keyClauses": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {"clauseId": _STR, "title": _STR},
+                "required": ["clauseId", "title"],
+            },
+        },
+        "importantDates": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {"label": _STR, "detail": _STR},
+                "required": ["label", "detail"],
+            },
+        },
+        "potentialIssues": _STR_ARRAY,
+        "questions": _STR_ARRAY,
+    },
+    "required": ["documentType", "keyClauses", "importantDates", "potentialIssues", "questions"],
+}
+
+
+# ---------------------------------------------------------------------------
+# Core call/parse machinery
+# ---------------------------------------------------------------------------
+
+def _finish_reason(resp):
     try:
-        resp = client.models.generate_content(model=MODEL, contents=user, config=config)
-    except genai_errors.APIError as e:
-        raise AIConfigError(f"Gemini API error: {e}")
-    raw = (resp.text or "").strip()
-    return _parse_json(raw, system, user, client, config)
+        return resp.candidates[0].finish_reason
+    except Exception:
+        return None
 
 
-def _parse_json(raw: str, system: str, user: str, client: genai.Client, config) -> dict:
-    cleaned = raw.strip()
+def _was_truncated(resp) -> bool:
+    reason = _finish_reason(resp)
+    return reason is not None and "MAX_TOKEN" in str(reason)
+
+
+def _extract_json_object(text: str) -> str:
+    cleaned = (text or "").strip()
     for fence in ("```json", "```"):
         if cleaned.startswith(fence):
             cleaned = cleaned[len(fence):]
     if cleaned.endswith("```"):
-        cleaned = cleaned[: -3]
+        cleaned = cleaned[:-3]
     cleaned = cleaned.strip()
     first, last = cleaned.find("{"), cleaned.rfind("}")
     if first >= 0 and last > first:
         cleaned = cleaned[first : last + 1]
+    return cleaned
+
+
+def _generate(client, system: str, user: str, schema: dict, max_output_tokens: int):
+    config = types.GenerateContentConfig(
+        system_instruction=system,
+        max_output_tokens=max_output_tokens,
+        response_mime_type="application/json",
+        response_schema=schema,
+    )
+    try:
+        return client.models.generate_content(model=MODEL, contents=user, config=config)
+    except genai_errors.APIError as e:
+        raise AIConfigError(f"Gemini API error: {e}")
+
+
+def _call_json(system: str, user: str, schema: dict, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS) -> dict:
+    client = _client()
+    resp = _generate(client, system, user, schema, max_output_tokens)
+    raw = (resp.text or "").strip()
+    cleaned = _extract_json_object(raw)
+
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        stricter_config = types.GenerateContentConfig(
-            system_instruction=system + "\nCRITICAL: return ONLY the JSON object, nothing else.",
-            max_output_tokens=config.max_output_tokens,
-            response_mime_type="application/json",
+        pass  # fall through to retry below
+
+    # First attempt failed to parse. Two distinct causes need two distinct
+    # fixes: the response got cut off (finish_reason == MAX_TOKENS), in
+    # which case re-asking with the same budget will just fail again the
+    # same way - so double the budget. Otherwise it's the model wrapping or
+    # garbling the JSON, so just remind it more sternly.
+    if _was_truncated(resp):
+        retry_system = system
+        retry_tokens = max_output_tokens * 2
+    else:
+        retry_system = system + "\nCRITICAL: return ONLY the JSON object, nothing else. Make sure it is complete and valid JSON."
+        retry_tokens = max_output_tokens
+
+    resp2 = _generate(client, retry_system, user, schema, retry_tokens)
+    raw2 = (resp2.text or "").strip()
+    cleaned2 = _extract_json_object(raw2)
+    try:
+        return json.loads(cleaned2)
+    except json.JSONDecodeError as e:
+        raise AIConfigError(
+            f"Gemini returned malformed JSON after retrying "
+            f"(finish_reason={_finish_reason(resp2)}): {e}"
         )
-        resp = client.models.generate_content(model=MODEL, contents=user, config=stricter_config)
-        raw2 = (resp.text or "").strip()
-        first, last = raw2.find("{"), raw2.rfind("}")
-        return json.loads(raw2[first : last + 1])
 
 
 def analyze_summary(clauses) -> dict:
@@ -100,7 +271,7 @@ def analyze_summary(clauses) -> dict:
 
 CLAUSES:
 {_clause_block(clauses)}"""
-    return _call_json(SYSTEM_BASE, prompt)
+    return _call_json(SYSTEM_BASE, prompt, SUMMARY_SCHEMA)
 
 
 def analyze_risks(clauses) -> dict:
@@ -113,7 +284,7 @@ At most 10 items, high severity first.
 
 CLAUSES:
 {_clause_block(clauses)}"""
-    return _call_json(SYSTEM_BASE, prompt)
+    return _call_json(SYSTEM_BASE, prompt, RISKS_SCHEMA)
 
 
 def answer_chat(retrieved_clauses, history: List[dict], question: str) -> dict:
@@ -130,7 +301,7 @@ If these clauses don't actually address the question, set documentSupport to "no
 
 RETRIEVED CLAUSES:
 {_clause_block(retrieved_clauses)}"""
-    return _call_json(SYSTEM_BASE, prompt)
+    return _call_json(SYSTEM_BASE, prompt, CHAT_SCHEMA)
 
 
 def next_steps(retrieved_clauses, question: Optional[str]) -> dict:
@@ -142,7 +313,7 @@ Return ONLY a JSON object:
 
 CLAUSES:
 {_clause_block(retrieved_clauses)}"""
-    return _call_json(SYSTEM_BASE, prompt)
+    return _call_json(SYSTEM_BASE, prompt, NEXT_STEPS_SCHEMA)
 
 
 def describe_diff(diff_entries, clauses_a, clauses_b) -> dict:
@@ -173,7 +344,7 @@ Return ONLY a JSON object:
 
 COMPUTED DIFF:
 {chr(10).join(lines) if lines else "(no differences detected)"}"""
-    return _call_json(SYSTEM_BASE, prompt)
+    return _call_json(SYSTEM_BASE, prompt, DIFF_SCHEMA)
 
 
 def lawyer_prep(clauses, concern: Optional[str]) -> dict:
@@ -188,4 +359,4 @@ Return ONLY a JSON object:
 
 CLAUSES:
 {_clause_block(clauses)}"""
-    return _call_json(SYSTEM_BASE, prompt)
+    return _call_json(SYSTEM_BASE, prompt, LAWYER_PREP_SCHEMA)
