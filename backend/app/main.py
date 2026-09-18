@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
 from . import ai
 from .ai import AIConfigError
@@ -25,12 +26,23 @@ from .storage import store
 
 app = FastAPI(title="LegalLens API", version="1.0.0")
 
+# Origins allowed to call this API. Defaults cover local dev and the
+# deployed frontend; add more via the ALLOWED_ORIGINS env var (comma
+# separated) rather than reopening this to "*".
+_default_origins = [
+    "http://localhost:3000",
+    "https://legalslens.vercel.app",
+]
+_extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten to the deployed frontend origin in production
-    allow_methods=["*"],
+    allow_origins=_default_origins + _extra_origins,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB — generous for a text-based legal document
 
 
 def _require_doc(session_id: str, doc_id: str):
@@ -62,6 +74,12 @@ def new_session():
 @app.post("/documents/upload", response_model=UploadResponse)
 async def upload_document(session_id: str, file: UploadFile = File(...)):
     content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(content) / 1_000_000:.1f} MB). Maximum allowed is "
+            f"{MAX_UPLOAD_BYTES / 1_000_000:.0f} MB.",
+        )
     try:
         text = extract_text(file.filename, content)
     except ExtractionError as e:
