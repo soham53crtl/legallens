@@ -9,6 +9,7 @@ failing silently.
 """
 import json
 import os
+import time
 from typing import List, Optional
 from google import genai
 from google.genai import types
@@ -16,6 +17,12 @@ from google.genai import errors as genai_errors
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
+
+# Gemini's free tier occasionally returns 503 UNAVAILABLE / "high demand" -
+# a transient overload on Google's side, not an error in our request. Retry
+# a few times with backoff before surfacing anything to the user.
+TRANSIENT_RETRY_ATTEMPTS = 3
+TRANSIENT_RETRY_BASE_DELAY_SECONDS = 2
 
 SYSTEM_BASE = """You are the analysis engine behind LegalLens, an AI legal-information and document-assistance tool. You are NOT a lawyer and never provide legal advice.
 Rules you must always follow:
@@ -206,6 +213,11 @@ def _extract_json_object(text: str) -> str:
     return cleaned
 
 
+def _is_transient(e: genai_errors.APIError) -> bool:
+    code = getattr(e, "code", None)
+    return code in (503, 429)
+
+
 def _generate(client, system: str, user: str, schema: dict, max_output_tokens: int):
     config = types.GenerateContentConfig(
         system_instruction=system,
@@ -213,10 +225,19 @@ def _generate(client, system: str, user: str, schema: dict, max_output_tokens: i
         response_mime_type="application/json",
         response_schema=schema,
     )
-    try:
-        return client.models.generate_content(model=MODEL, contents=user, config=config)
-    except genai_errors.APIError as e:
-        raise AIConfigError(f"Gemini API error: {e}")
+    last_error = None
+    for attempt in range(1, TRANSIENT_RETRY_ATTEMPTS + 1):
+        try:
+            return client.models.generate_content(model=MODEL, contents=user, config=config)
+        except genai_errors.APIError as e:
+            last_error = e
+            if _is_transient(e) and attempt < TRANSIENT_RETRY_ATTEMPTS:
+                # Exponential backoff: 2s, 4s, ... before trying again.
+                time.sleep(TRANSIENT_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
+                continue
+            raise AIConfigError(f"Gemini API error: {e}")
+    # Unreachable, but keeps type-checkers happy.
+    raise AIConfigError(f"Gemini API error: {last_error}")
 
 
 def _call_json(system: str, user: str, schema: dict, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS) -> dict:
