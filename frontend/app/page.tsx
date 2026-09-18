@@ -1,16 +1,28 @@
-"use client";
+﻿"use client";
 import { useState } from "react";
 import UploadModal from "@/components/UploadModal";
+import { useDoc } from "@/lib/store";
 
 export default function Landing() {
   const [modal, setModal] = useState<"primary" | "compare" | null>(null);
+  const { sessionStatus } = useDoc();
 
   return (
     <div>
+      {sessionStatus === "connecting" && (
+        <div className="mt-4 text-[12.5px] text-ink-faint status-dot flex items-center gap-1.5">
+          Connecting to the server (may take up to a minute on first load)...
+        </div>
+      )}
+      {sessionStatus === "failed" && (
+        <div className="mt-4 text-[12.5px] text-risk-high">
+          Couldn&apos;t reach the server. Refresh the page to try again.
+        </div>
+      )}
       <div className="grid md:grid-cols-[1.1fr_1fr] gap-14 items-center pt-9 md:pt-16 pb-12">
         <div>
           <div className="inline-flex items-center gap-1.5 text-[12.5px] text-ink-soft border border-line-strong px-2.5 py-1 rounded-full mb-5">
-            <span className="text-highlight text-[9px]">●</span> AI for Legal Assistance &amp; Access
+            <span className="text-highlight text-[9px]">â—</span> AI for Legal Assistance &amp; Access
           </div>
           <h1 className="font-serif text-[34px] md:text-[46px] leading-[1.08] font-medium mb-5 tracking-tight">
             Understand the fine print.
@@ -50,7 +62,7 @@ export default function Landing() {
             </button>
           </div>
           <div className="mt-3.5 text-[12.5px] text-ink-faint">
-            PDF, DOCX or TXT · processed for this session, never shared
+            PDF, DOCX or TXT Â· processed for this session, never shared
           </div>
         </div>
 
@@ -70,10 +82,10 @@ export default function Landing() {
             <div className="text-[9px] tracking-wider text-highlight font-semibold mb-0.5">
               NOTICE PERIOD
             </div>
-            60 days written notice required before termination — see Clause 9.
+            60 days written notice required before termination â€” see Clause 9.
           </div>
           <div className="absolute -left-8 top-[210px] bg-risk-high-bg text-risk-high text-[11px] font-semibold px-2.5 py-1.5 rounded-full shadow-paper">
-            🔴 Auto-renewal clause
+            ðŸ”´ Auto-renewal clause
           </div>
         </div>
       </div>
@@ -108,3 +120,6 @@ export default function Landing() {
     </div>
   );
 }
+
+
+

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import type { Clause, SummaryResult, RiskItem, ChatMessage, CompareResult } from "./types";
 import { createSession } from "./api";
@@ -22,6 +22,7 @@ interface CompareDocData extends DocData {
 
 interface DocContextValue {
   sessionId: string | null;
+  sessionStatus: "connecting" | "ready" | "failed";
   doc: DocData | null;
   compareDoc: CompareDocData | null;
   chatHistory: ChatMessage[];
@@ -36,26 +37,47 @@ interface DocContextValue {
 
 const DocContext = createContext<DocContextValue | null>(null);
 
+const RETRY_DELAYS_MS = [1000, 3000, 5000, 8000, 8000, 8000, 8000, 8000];
+
 export function DocProvider({ children }: { children: React.ReactNode }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionStatus, setSessionStatus] = useState<"connecting" | "ready" | "failed">("connecting");
   const [doc, setDocState] = useState<DocData | null>(null);
   const [compareDoc, setCompareDocState] = useState<CompareDocData | null>(null);
   const [chatHistory, setChatHistoryState] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
     const existing = typeof window !== "undefined" ? sessionStorage.getItem("ll_session_id") : null;
     if (existing) {
       setSessionId(existing);
-    } else {
-      createSession()
-        .then((sid) => {
-          setSessionId(sid);
-          sessionStorage.setItem("ll_session_id", sid);
-        })
-        .catch(() => {
-          /* backend may not be reachable yet; pages surface their own errors */
-        });
+      setSessionStatus("ready");
+      return;
     }
+
+    async function connectWithRetry() {
+      for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+        try {
+          const sid = await createSession();
+          if (cancelled) return;
+          setSessionId(sid);
+          setSessionStatus("ready");
+          sessionStorage.setItem("ll_session_id", sid);
+          return;
+        } catch {
+          if (cancelled) return;
+          if (attempt === RETRY_DELAYS_MS.length) {
+            setSessionStatus("failed");
+            return;
+          }
+          await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+        }
+      }
+    }
+    connectWithRetry();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const setDoc = useCallback((d: DocData | null) => setDocState(d), []);
@@ -89,6 +111,7 @@ export function DocProvider({ children }: { children: React.ReactNode }) {
     <DocContext.Provider
       value={{
         sessionId,
+        sessionStatus,
         doc,
         compareDoc,
         chatHistory,
