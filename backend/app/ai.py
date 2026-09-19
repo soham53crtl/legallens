@@ -14,6 +14,7 @@ from typing import List, Optional
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
+import openai
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -23,6 +24,12 @@ DEFAULT_MAX_OUTPUT_TOKENS = 4096
 # a few times with backoff before surfacing anything to the user.
 TRANSIENT_RETRY_ATTEMPTS = 3
 TRANSIENT_RETRY_BASE_DELAY_SECONDS = 2
+
+# Grok (xAI) fallback: only used if Gemini fails outright (after its own
+# retries above) AND an XAI_API_KEY is configured. Gemini stays the primary
+# path in every case - this never changes behavior when Gemini succeeds.
+GROK_MODEL = os.environ.get("GROK_MODEL", "grok-4-fast")
+GROK_BASE_URL = "https://api.x.ai/v1"
 
 SYSTEM_BASE = """You are the analysis engine behind LegalLens, an AI legal-information and document-assistance tool. You are NOT a lawyer and never provide legal advice.
 Rules you must always follow:
@@ -240,7 +247,7 @@ def _generate(client, system: str, user: str, schema: dict, max_output_tokens: i
     raise AIConfigError(f"Gemini API error: {last_error}")
 
 
-def _call_json(system: str, user: str, schema: dict, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS) -> dict:
+def _call_json_gemini(system: str, user: str, schema: dict, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS) -> dict:
     client = _client()
     resp = _generate(client, system, user, schema, max_output_tokens)
     raw = (resp.text or "").strip()
@@ -273,6 +280,76 @@ def _call_json(system: str, user: str, schema: dict, max_output_tokens: int = DE
             f"Gemini returned malformed JSON after retrying "
             f"(finish_reason={_finish_reason(resp2)}): {e}"
         )
+
+
+def _grok_client() -> Optional[openai.OpenAI]:
+    key = os.environ.get("XAI_API_KEY")
+    if not key:
+        return None
+    return openai.OpenAI(api_key=key, base_url=GROK_BASE_URL)
+
+
+def _call_json_grok(system: str, user: str, schema: dict, max_output_tokens: int) -> dict:
+    """Fallback path used only when Gemini has already failed. xAI's Grok API
+    is OpenAI-compatible, so we reuse the same client shape. We include our
+    JSON schema in the prompt itself (Grok's JSON mode guarantees valid JSON
+    syntax, but not a specific shape the way Gemini's response_schema does),
+    then validate/retry the same way we do for Gemini."""
+    client = _grok_client()
+    if client is None:
+        raise AIConfigError("Grok fallback unavailable: XAI_API_KEY is not set.")
+
+    schema_hint = f"\nYour JSON response MUST match this exact shape: {json.dumps(schema)}"
+
+    def _ask(sys_prompt: str, tokens: int):
+        try:
+            return client.chat.completions.create(
+                model=GROK_MODEL,
+                max_tokens=tokens,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": sys_prompt + schema_hint},
+                    {"role": "user", "content": user},
+                ],
+            )
+        except openai.APIError as e:
+            raise AIConfigError(f"Grok API error: {e}")
+
+    resp = _ask(system, max_output_tokens)
+    raw = (resp.choices[0].message.content or "").strip()
+    cleaned = _extract_json_object(raw)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    stricter = system + "\nCRITICAL: return ONLY the JSON object, nothing else. Make sure it is complete and valid JSON matching the required shape."
+    resp2 = _ask(stricter, max_output_tokens * 2)
+    raw2 = (resp2.choices[0].message.content or "").strip()
+    cleaned2 = _extract_json_object(raw2)
+    try:
+        return json.loads(cleaned2)
+    except json.JSONDecodeError as e:
+        raise AIConfigError(f"Grok returned malformed JSON after retrying: {e}")
+
+
+def _call_json(system: str, user: str, schema: dict, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS) -> dict:
+    """Gemini is always tried first - this is the same path that already
+    works today, unchanged. Only if Gemini fails outright (after its own
+    internal retries) do we fall back to Grok, and only if XAI_API_KEY is
+    configured. If it isn't set, behavior is identical to before this
+    fallback existed."""
+    try:
+        return _call_json_gemini(system, user, schema, max_output_tokens)
+    except AIConfigError as gemini_error:
+        if not os.environ.get("XAI_API_KEY"):
+            raise
+        try:
+            return _call_json_grok(system, user, schema, max_output_tokens)
+        except Exception as grok_error:
+            raise AIConfigError(
+                f"Both AI providers failed. Gemini: {gemini_error} | Grok fallback: {grok_error}"
+            )
 
 
 def analyze_summary(clauses) -> dict:
