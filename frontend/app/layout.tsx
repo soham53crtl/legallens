@@ -31,9 +31,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${fraunces.variable} ${plexSans.variable} ${plexMono.variable}`}>
       <body className="font-sans text-[15.5px] leading-[1.55] pb-14 bg-paper text-ink">
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[200] focus:bg-ink focus:text-paper focus:px-4 focus:py-2 focus:rounded"
+        >
+          Skip to main content
+        </a>
         <DocProvider>
           <Nav />
-          <main className="max-w-[1080px] mx-auto px-7">{children}</main>
+          <main id="main-content" className="max-w-[1080px] mx-auto px-7">{children}</main>
           <DisclaimerBar />
         </DocProvider>
       </body>
