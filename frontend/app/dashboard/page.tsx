@@ -41,7 +41,7 @@ export default function Dashboard() {
     <div>
       <div className="flex items-center justify-between flex-wrap gap-2.5 pt-6 pb-1.5">
         <div>
-          <div className="font-serif text-[22px] font-semibold">{doc.name}</div>
+          <h1 className="font-serif text-[22px] font-semibold">{doc.name}</h1>
           <div className="text-[12.5px] text-ink-faint mt-0.5">
             {doc.word_count} words · {doc.clauses.length} clauses detected
           </div>
@@ -152,13 +152,21 @@ export default function Dashboard() {
 function StatusPill({ status, error }: { status: string; error?: string }) {
   if (status === "done")
     return (
-      <span className="inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-full bg-paper-alt border border-line text-ink-soft">
+      <span
+        role="status"
+        aria-live="polite"
+        className="inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-full bg-paper-alt border border-line text-ink-soft"
+      >
         <span className="text-risk-low">✓</span> Analysis complete
       </span>
     );
   if (status === "error")
     return (
-      <span className="inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-full bg-risk-high-bg border border-line text-risk-high">
+      <span
+        role="status"
+        aria-live="assertive"
+        className="inline-flex items-center gap-1.5 text-[12px] px-2.5 py-1 rounded-full bg-risk-high-bg border border-line text-risk-high"
+      >
         Analysis failed{error ? ` — ${error}` : ""}
       </span>
     );
@@ -179,7 +187,7 @@ function Card({ children, className = "" }: { children: React.ReactNode; classNa
 function CardHead({ title, tag }: { title: string; tag: string }) {
   return (
     <div className="flex items-center justify-between">
-      <h3 className="text-[15px] font-semibold">{title}</h3>
+      <h2 className="text-[15px] font-semibold">{title}</h2>
       <span className="text-[10.5px] font-mono text-ink-faint">{tag}</span>
     </div>
   );
