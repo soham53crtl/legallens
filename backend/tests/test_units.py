@@ -117,3 +117,59 @@ def test_extract_unsupported_type():
         assert False, "should have raised"
     except ExtractionError:
         pass
+
+
+# --- Gemini -> Grok fallback dispatcher -------------------------------
+# These test app.ai._call_json's own routing logic in isolation (no real
+# network calls to either provider) - they verify the fallback actually
+# activates/deactivates under the right conditions, not just that it
+# compiles.
+
+from app import ai
+
+
+def test_call_json_falls_back_to_grok_when_gemini_fails(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai, "_call_json_gemini", lambda *a, **k: (_ for _ in ()).throw(ai.AIConfigError("gemini down")))
+    monkeypatch.setattr(ai, "_call_json_grok", lambda *a, **k: {"ok": True, "source": "grok"})
+    result = ai._call_json("sys", "user", {"type": "OBJECT"})
+    assert result == {"ok": True, "source": "grok"}
+
+
+def test_call_json_no_fallback_without_xai_key(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr(ai, "_call_json_gemini", lambda *a, **k: (_ for _ in ()).throw(ai.AIConfigError("gemini down")))
+
+    def _grok_should_not_be_called(*a, **k):
+        raise AssertionError("Grok should never be invoked when XAI_API_KEY is unset")
+
+    monkeypatch.setattr(ai, "_call_json_grok", _grok_should_not_be_called)
+    try:
+        ai._call_json("sys", "user", {"type": "OBJECT"})
+        assert False, "should have raised"
+    except ai.AIConfigError as e:
+        assert str(e) == "gemini down"
+
+
+def test_call_json_gemini_success_never_touches_grok(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai, "_call_json_gemini", lambda *a, **k: {"ok": True, "source": "gemini"})
+
+    def _grok_should_not_be_called(*a, **k):
+        raise AssertionError("Grok should never be invoked when Gemini succeeds")
+
+    monkeypatch.setattr(ai, "_call_json_grok", _grok_should_not_be_called)
+    result = ai._call_json("sys", "user", {"type": "OBJECT"})
+    assert result == {"ok": True, "source": "gemini"}
+
+
+def test_call_json_both_providers_fail_raises_combined_error(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai, "_call_json_gemini", lambda *a, **k: (_ for _ in ()).throw(ai.AIConfigError("gemini boom")))
+    monkeypatch.setattr(ai, "_call_json_grok", lambda *a, **k: (_ for _ in ()).throw(ai.AIConfigError("grok boom")))
+    try:
+        ai._call_json("sys", "user", {"type": "OBJECT"})
+        assert False, "should have raised"
+    except ai.AIConfigError as e:
+        assert "gemini boom" in str(e)
+        assert "grok boom" in str(e)

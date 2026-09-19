@@ -14,7 +14,6 @@ from typing import List, Optional
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
-import openai
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -282,10 +281,11 @@ def _call_json_gemini(system: str, user: str, schema: dict, max_output_tokens: i
         )
 
 
-def _grok_client() -> Optional[openai.OpenAI]:
+def _grok_client():
     key = os.environ.get("XAI_API_KEY")
     if not key:
         return None
+    import openai  # lazy: only paid for (import cost, memory) when Gemini has already failed
     return openai.OpenAI(api_key=key, base_url=GROK_BASE_URL)
 
 
@@ -295,6 +295,8 @@ def _call_json_grok(system: str, user: str, schema: dict, max_output_tokens: int
     JSON schema in the prompt itself (Grok's JSON mode guarantees valid JSON
     syntax, but not a specific shape the way Gemini's response_schema does),
     then validate/retry the same way we do for Gemini."""
+    import openai  # same lazy import - cheap the second time (already cached in sys.modules)
+
     client = _grok_client()
     if client is None:
         raise AIConfigError("Grok fallback unavailable: XAI_API_KEY is not set.")

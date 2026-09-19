@@ -181,3 +181,41 @@ def test_ai_config_error_returns_503(monkeypatch):
     doc = _load_demo(session_id)
     r = client.get(f"/documents/{session_id}/{doc['doc_id']}/summary")
     assert r.status_code == 503
+
+
+def test_upload_rejects_file_over_size_limit():
+    session_id = _new_session()
+    oversized = b"x" * (main.MAX_UPLOAD_BYTES + 1)
+    files = {"file": ("huge.txt", oversized, "text/plain")}
+    r = client.post(f"/documents/upload?session_id={session_id}", files=files)
+    assert r.status_code == 413
+
+
+def test_upload_accepts_file_at_size_limit():
+    session_id = _new_session()
+    exactly_at_limit = b"1. Term. " + b"a" * (main.MAX_UPLOAD_BYTES - 20)
+    files = {"file": ("large.txt", exactly_at_limit, "text/plain")}
+    r = client.post(f"/documents/upload?session_id={session_id}", files=files)
+    assert r.status_code == 200
+
+
+def test_cors_allows_known_frontend_origin():
+    r = client.options(
+        "/health",
+        headers={
+            "Origin": "https://legalslens.vercel.app",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert r.headers.get("access-control-allow-origin") == "https://legalslens.vercel.app"
+
+
+def test_cors_rejects_unknown_origin():
+    r = client.options(
+        "/health",
+        headers={
+            "Origin": "https://some-random-attacker-site.com",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert "access-control-allow-origin" not in {k.lower() for k in r.headers.keys()}
