@@ -8,3 +8,4 @@ python-multipart==0.0.9
 groq==1.7.0
 openai==1.109.1
 pydantic>=2.12.5
+slowapi>=0.1.9
