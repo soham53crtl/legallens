@@ -1,6 +1,9 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import os
 
 from . import ai
@@ -26,6 +29,15 @@ from .models import (
 from .storage import store
 
 app = FastAPI(title="LegalLens API", version="1.0.0")
+
+# Rate limiting: caps abuse/cost-runaway on the endpoints that call the paid
+# Groq API. Keyed by client IP; 10/min is generous for real usage (a human
+# reading responses can't realistically trigger more) but blocks scripted
+# spamming. Adjust per-route below if a specific endpoint needs a different
+# limit.
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Origins allowed to call this API. Defaults cover local dev and the
 # deployed frontend; add more via the ALLOWED_ORIGINS env var (comma
@@ -74,7 +86,8 @@ def new_session():
 
 
 @app.post("/documents/upload", response_model=UploadResponse)
-async def upload_document(session_id: str, file: UploadFile = File(...)):
+@limiter.limit("20/minute")
+async def upload_document(request: Request, session_id: str, file: UploadFile = File(...)):
     content = await file.read()
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -113,7 +126,8 @@ def load_demo(session_id: str, variant: str = "lease"):
 
 
 @app.get("/documents/{session_id}/{doc_id}/summary", response_model=SummaryResult)
-def get_summary(session_id: str, doc_id: str):
+@limiter.limit("10/minute")
+def get_summary(request: Request, session_id: str, doc_id: str):
     doc = _require_doc(session_id, doc_id)
     if doc.summary is None:
         try:
@@ -124,7 +138,8 @@ def get_summary(session_id: str, doc_id: str):
 
 
 @app.get("/documents/{session_id}/{doc_id}/risks", response_model=RiskResult)
-def get_risks(session_id: str, doc_id: str):
+@limiter.limit("10/minute")
+def get_risks(request: Request, session_id: str, doc_id: str):
     doc = _require_doc(session_id, doc_id)
     if doc.risks is None:
         try:
@@ -135,7 +150,8 @@ def get_risks(session_id: str, doc_id: str):
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
+@limiter.limit("10/minute")
+def chat(request: Request, req: ChatRequest):
     doc = _require_doc(req.session_id, req.doc_id)
     retrieved = doc.index.retrieve(req.message, top_k=6)
     retrieved_clauses = [c for c, _score in retrieved]
@@ -152,7 +168,8 @@ def chat(req: ChatRequest):
 
 
 @app.post("/next-steps", response_model=NextStepResult)
-def get_next_steps(req: NextStepRequest):
+@limiter.limit("10/minute")
+def get_next_steps(request: Request, req: NextStepRequest):
     doc = _require_doc(req.session_id, req.doc_id)
     if req.question:
         retrieved = [c for c, _s in doc.index.retrieve(req.question, top_k=6)]
@@ -167,7 +184,8 @@ def get_next_steps(req: NextStepRequest):
 
 
 @app.post("/compare", response_model=CompareResult)
-def compare(req: CompareRequest):
+@limiter.limit("10/minute")
+def compare(request: Request, req: CompareRequest):
     doc_a = _require_doc(req.session_id, req.doc_id_a)
     doc_b = _require_doc(req.session_id, req.doc_id_b)
 
@@ -192,7 +210,8 @@ def compare(req: CompareRequest):
 
 
 @app.post("/lawyer-prep", response_model=LawyerPrepResult)
-def get_lawyer_prep(req: LawyerPrepRequest):
+@limiter.limit("10/minute")
+def get_lawyer_prep(request: Request, req: LawyerPrepRequest):
     doc = _require_doc(req.session_id, req.doc_id)
     try:
         result = ai.lawyer_prep(doc.clauses, req.concern)
