@@ -5,13 +5,15 @@ generated server-side and never guessable from the outside. All read/write
 access to a document requires both the session_id and doc_id to match —
 a client can never enumerate or fetch another session's documents, which
 is the concrete mechanism behind "avoid exposing uploaded documents to
-other users." Sessions expire after SESSION_TTL_SECONDS of inactivity and
-are swept on each request, so nothing is retained indefinitely.
+other users." Sessions expire after SESSION_TTL_SECONDS of inactivity; the
+sweep itself is throttled to run at most once per SWEEP_INTERVAL_SECONDS
+(not on every request) since it's an O(active sessions) scan.
 
 For a real production deployment behind persistent storage, swap this
 module for a Redis/Postgres-backed store keyed the same way (session_id,
 doc_id) with the same access check — the rest of the app is unaffected.
 """
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -20,6 +22,9 @@ from .models import Clause
 from .retrieval import ClauseIndex, build_index
 
 SESSION_TTL_SECONDS = 60 * 60  # 1 hour of inactivity
+SWEEP_INTERVAL_SECONDS = 5 * 60  # only actually sweep at most every 5 minutes,
+# not on every single request — sweeping is an O(active_sessions) scan and
+# doesn't need to run per-request to keep memory bounded.
 
 
 @dataclass
@@ -44,29 +49,38 @@ class Session:
 class Store:
     def __init__(self):
         self._sessions: Dict[str, Session] = {}
+        self._lock = threading.Lock()
+        self._last_sweep = 0.0
 
     def _sweep(self):
-        now = time.time()
-        expired = [
-            sid
-            for sid, s in self._sessions.items()
-            if now - s.last_seen > SESSION_TTL_SECONDS
-        ]
-        for sid in expired:
-            del self._sessions[sid]
+        # Sync routes run in FastAPI's thread pool, so guard shared state.
+        with self._lock:
+            now = time.time()
+            if now - self._last_sweep < SWEEP_INTERVAL_SECONDS:
+                return
+            self._last_sweep = now
+            expired = [
+                sid
+                for sid, s in self._sessions.items()
+                if now - s.last_seen > SESSION_TTL_SECONDS
+            ]
+            for sid in expired:
+                del self._sessions[sid]
 
     def new_session(self) -> str:
         self._sweep()
         sid = str(uuid.uuid4())
-        self._sessions[sid] = Session(session_id=sid, last_seen=time.time())
+        with self._lock:
+            self._sessions[sid] = Session(session_id=sid, last_seen=time.time())
         return sid
 
     def _get_session(self, session_id: str) -> Optional[Session]:
         self._sweep()
-        s = self._sessions.get(session_id)
-        if s:
-            s.last_seen = time.time()
-        return s
+        with self._lock:
+            s = self._sessions.get(session_id)
+            if s:
+                s.last_seen = time.time()
+            return s
 
     def add_document(self, session_id: str, name: str, text: str, clauses: list):
         session = self._get_session(session_id)
@@ -76,13 +90,14 @@ class Store:
             session_id = self.new_session()
             session = self._sessions[session_id]
         doc_id = str(uuid.uuid4())
-        session.documents[doc_id] = StoredDocument(
-            doc_id=doc_id,
-            name=name,
-            text=text,
-            clauses=clauses,
-            index=build_index(clauses),
-        )
+        with self._lock:
+            session.documents[doc_id] = StoredDocument(
+                doc_id=doc_id,
+                name=name,
+                text=text,
+                clauses=clauses,
+                index=build_index(clauses),
+            )
         return session_id, doc_id
 
     def get_document(self, session_id: str, doc_id: str) -> Optional[StoredDocument]:
