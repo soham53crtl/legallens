@@ -119,57 +119,85 @@ def test_extract_unsupported_type():
         pass
 
 
-# --- Gemini -> Grok fallback dispatcher -------------------------------
-# These test app.ai._call_json's own routing logic in isolation (no real
-# network calls to either provider) - they verify the fallback actually
-# activates/deactivates under the right conditions, not just that it
-# compiles.
+# --- Groq _call_json behavior --------------------------------------------
+# ai.py now uses Groq as the sole provider. These test _call_json's own
+# retry-on-malformed-JSON logic and error handling in isolation, using a
+# fake Groq client so no real network call is made.
 
 from app import ai
 
 
-def test_call_json_falls_back_to_grok_when_gemini_fails(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "test-key")
-    monkeypatch.setattr(ai, "_call_json_gemini", lambda *a, **k: (_ for _ in ()).throw(ai.AIConfigError("gemini down")))
-    monkeypatch.setattr(ai, "_call_json_grok", lambda *a, **k: {"ok": True, "source": "grok"})
-    result = ai._call_json("sys", "user", {"type": "OBJECT"})
-    assert result == {"ok": True, "source": "grok"}
+class _FakeMessage:
+    def __init__(self, content):
+        self.content = content
 
 
-def test_call_json_no_fallback_without_xai_key(monkeypatch):
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
-    monkeypatch.setattr(ai, "_call_json_gemini", lambda *a, **k: (_ for _ in ()).throw(ai.AIConfigError("gemini down")))
+class _FakeChoice:
+    def __init__(self, content):
+        self.message = _FakeMessage(content)
 
-    def _grok_should_not_be_called(*a, **k):
-        raise AssertionError("Grok should never be invoked when XAI_API_KEY is unset")
 
-    monkeypatch.setattr(ai, "_call_json_grok", _grok_should_not_be_called)
+class _FakeCompletion:
+    def __init__(self, content):
+        self.choices = [_FakeChoice(content)]
+
+
+class _FakeChatCompletions:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.call_count = 0
+
+    def create(self, **kwargs):
+        self.call_count += 1
+        content = self._responses[min(self.call_count - 1, len(self._responses) - 1)]
+        return _FakeCompletion(content)
+
+
+class _FakeChat:
+    def __init__(self, responses):
+        self.completions = _FakeChatCompletions(responses)
+
+
+class _FakeGroqClient:
+    def __init__(self, responses):
+        self.chat = _FakeChat(responses)
+
+
+def test_call_json_missing_api_key_raises(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     try:
-        ai._call_json("sys", "user", {"type": "OBJECT"})
+        ai._call_json("sys", "user")
         assert False, "should have raised"
     except ai.AIConfigError as e:
-        assert str(e) == "gemini down"
+        assert "GROQ_API_KEY" in str(e)
 
 
-def test_call_json_gemini_success_never_touches_grok(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "test-key")
-    monkeypatch.setattr(ai, "_call_json_gemini", lambda *a, **k: {"ok": True, "source": "gemini"})
-
-    def _grok_should_not_be_called(*a, **k):
-        raise AssertionError("Grok should never be invoked when Gemini succeeds")
-
-    monkeypatch.setattr(ai, "_call_json_grok", _grok_should_not_be_called)
-    result = ai._call_json("sys", "user", {"type": "OBJECT"})
-    assert result == {"ok": True, "source": "gemini"}
+def test_call_json_returns_parsed_json_on_success(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    fake_client = _FakeGroqClient(responses=['{"answer": "hello"}'])
+    monkeypatch.setattr(ai, "Groq", lambda api_key: fake_client)
+    result = ai._call_json("sys", "user")
+    assert result == {"answer": "hello"}
+    assert fake_client.chat.completions.call_count == 1
 
 
-def test_call_json_both_providers_fail_raises_combined_error(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "test-key")
-    monkeypatch.setattr(ai, "_call_json_gemini", lambda *a, **k: (_ for _ in ()).throw(ai.AIConfigError("gemini boom")))
-    monkeypatch.setattr(ai, "_call_json_grok", lambda *a, **k: (_ for _ in ()).throw(ai.AIConfigError("grok boom")))
+def test_call_json_retries_on_malformed_json_then_succeeds(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    fake_client = _FakeGroqClient(responses=["not valid json{{{", '{"answer": "recovered"}'])
+    monkeypatch.setattr(ai, "Groq", lambda api_key: fake_client)
+    result = ai._call_json("sys", "user")
+    assert result == {"answer": "recovered"}
+    assert fake_client.chat.completions.call_count == 2
+
+
+def test_call_json_raises_after_two_malformed_responses(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    fake_client = _FakeGroqClient(responses=["still not json", "still not json either"])
+    monkeypatch.setattr(ai, "Groq", lambda api_key: fake_client)
     try:
-        ai._call_json("sys", "user", {"type": "OBJECT"})
+        ai._call_json("sys", "user")
         assert False, "should have raised"
     except ai.AIConfigError as e:
-        assert "gemini boom" in str(e)
-        assert "grok boom" in str(e)
+        assert "malformed JSON twice" in str(e)
+    assert fake_client.chat.completions.call_count == 2
+
