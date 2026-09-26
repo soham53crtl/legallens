@@ -11,7 +11,7 @@ client = TestClient(main.app)
 @pytest.fixture(autouse=True)
 def mock_ai(monkeypatch):
     """Every test runs with AI calls mocked so the suite never needs a real
-    ANTHROPIC_API_KEY or network access — it verifies the app's own logic
+    GROQ_API_KEY or network access — it verifies the app's own logic
     (routing, storage isolation, retrieval, diff computation), not the LLM."""
     monkeypatch.setattr(ai, "analyze_summary", lambda clauses: {
         "documentType": "Residential Lease Agreement",

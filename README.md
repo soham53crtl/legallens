@@ -125,11 +125,11 @@ test (`test_document_isolation_across_sessions`), not just asserted in the UI co
 cd backend
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # then put a real ANTHROPIC_API_KEY in .env
+cp .env.example .env   # then put a real GROQ_API_KEY in .env
 export $(cat .env | xargs)
 uvicorn app.main:app --reload --port 8000
 ```
-Without `ANTHROPIC_API_KEY` set, every non-AI endpoint (upload, demo load, clause
+Without `GROQ_API_KEY` set, every non-AI endpoint (upload, demo load, clause
 retrieval) still works — only the LLM-backed endpoints return a clear `503` rather than
 crashing. This is intentional and tested (`test_ai_config_error_returns_503`).
 
@@ -161,14 +161,14 @@ git branch -M main
 git push -u origin main
 ```
 
-Then add `ANTHROPIC_API_KEY` as a repository secret if you wire up a deploy workflow, and
+Then add `GROQ_API_KEY` as a repository secret if you wire up a deploy workflow, and
 set the same variable in your Render/hosting provider's environment — never in the repo.
 
 ## Deploying
 
 Same pattern as other projects in this portfolio: frontend on Vercel
 (`NEXT_PUBLIC_API_URL` pointed at the deployed backend), backend on Render with
-`ANTHROPIC_API_KEY` set as a secret environment variable. `storage.py`'s in-memory store
+`GROQ_API_KEY` set as a secret environment variable. `storage.py`'s in-memory store
 is the one piece to swap for Redis/Postgres if you need documents to survive a backend
 restart — the session_id/doc_id access-check pattern carries over unchanged.
 
